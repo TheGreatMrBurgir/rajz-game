@@ -1,6 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO;
+using Microsoft.EntityFrameworkCore;
 
 class Program
 {
@@ -10,49 +10,19 @@ class Program
     static int y = Console.WindowHeight / 2;
     static bool exit = false;
     static bool inDrawingMode = false;
+
     static string[] menuOptions = { "Új rajz", "Szerkesztés", "Törlés", "Kilépés" };
     static int selectedIndex = 0;
 
-    static List<(int x, int y, char karakter, ConsoleColor szin)> rajz = new List<(int, int, char, ConsoleColor)>();
+    static List<Point> rajz = new List<Point>();
+
     static string saveDirectory = "rajzok";
-    /*
-     *static void Main(string[] args)
- {
-     int x = Console.WindowWidth / 2;
-     int v = 0;
-     bool w = false;
-     Console.Clear();
-     DrawBorder();
 
-     do
-     {
-
-         DrawMenu(x, ref v);
-
-         switch (Console.ReadKey(true).Key)
-         {
-             case ConsoleKey.UpArrow:
-                 v = v > 0 ? v - 1 : 3; 
-                 break;
-             case ConsoleKey.DownArrow:
-                 v = v < 3 ? v + 1 : 0;
-                 break;
-             case ConsoleKey.Enter:
-                 if (v == 3) w = true;
-                 break;
-             case ConsoleKey.Escape:
-                 w = true;
-                 break;
-         }
-
-     } while (!w);
- }
-     */
     static void Main()
     {
-        if (!Directory.Exists(saveDirectory))
+        using (var context = new DrawingContext())
         {
-            Directory.CreateDirectory(saveDirectory);
+            context.Database.Migrate();  
         }
 
         ShowMainMenu();
@@ -71,10 +41,8 @@ class Program
 
     static void ShowMainMenu()
     {
-
         DrawMenuBorder();
         ShowMenu(menuOptions, selectedIndex);
-
         while (!inDrawingMode && !exit)
         {
             var key = Console.ReadKey(true);
@@ -99,8 +67,6 @@ class Program
                         break;
                 }
             }
-
-            Console.Clear();
             DrawMenuBorder();
             ShowMenu(menuOptions, selectedIndex);
         }
@@ -117,99 +83,108 @@ class Program
 
     static void EditDrawing()
     {
-        var files = Directory.GetFiles(saveDirectory);
-        if (files.Length == 0)
+        using (var context = new DrawingContext())
         {
-            Console.Clear();
-            Console.WriteLine("Nincs elérhető rajz a szerkesztéshez.");
-            Console.ReadKey();
-            return;
-        }
+            var drawings = context.Drawings.ToArray();
+            if (drawings.Length == 0)
+            {
+                Console.Clear();
+                Console.WriteLine("Nincs elérhető rajz a szerkesztéshez.");
+                Console.ReadKey();
+                return;
+            }
 
-        var selectedFile = SelectFile(files);
-        LoadDrawing(selectedFile);
-        inDrawingMode = true;
-        Console.Clear();
+            var selectedDrawing = SelectDrawing(drawings);
+            LoadDrawing(selectedDrawing);
+            inDrawingMode = true;
+            Console.Clear();
+        }
     }
 
     static void DeleteDrawing()
     {
-        var files = Directory.GetFiles(saveDirectory);
-        if (files.Length == 0)
+        using (var context = new DrawingContext())
         {
-            Console.Clear();
-            Console.WriteLine("Nincs elérhető rajz a törléshez.");
-            Console.ReadKey();
-            return;
-        }
+            var drawings = context.Drawings.ToArray();
+            if (drawings.Length == 0)
+            {
+                Console.Clear();
+                Console.WriteLine("Nincs elérhető rajz a törléshez.");
+                Console.ReadKey();
+                return;
+            }
 
-        var selectedFile = SelectFile(files);
-        File.Delete(selectedFile);
-        Console.Clear();
-        Console.WriteLine("A fájl törölve lett.");
-        Console.ReadKey();
+            var selectedDrawing = SelectDrawing(drawings);
+            context.Drawings.Remove(selectedDrawing);
+            context.SaveChanges();
+            Console.Clear();
+            Console.WriteLine("A fájl törölve lett.");
+            Console.ReadKey();
+        }
     }
 
-    static string SelectFile(string[] files)
+    static Drawing SelectDrawing(Drawing[] drawings)
     {
-        int fileIndex = 0;
+        int drawingIndex = 0;
         while (true)
         {
             Console.Clear();
             Console.WriteLine("Válassz egy rajzot:");
-            for (int i = 0; i < files.Length; i++)
+            for (int i = 0; i < drawings.Length; i++)
             {
-                if (i == fileIndex)
+                if (i == drawingIndex)
                     Console.ForegroundColor = ConsoleColor.DarkGreen;
                 else
                     Console.ResetColor();
-
-                Console.WriteLine(Path.GetFileName(files[i]));
+                Console.WriteLine($"Rajz {i + 1}: {drawings[i].Name}");
             }
 
             var key = Console.ReadKey(true);
-            if (key.Key == ConsoleKey.UpArrow && fileIndex > 0) fileIndex--;
-            else if (key.Key == ConsoleKey.DownArrow && fileIndex < files.Length - 1) fileIndex++;
+            if (key.Key == ConsoleKey.UpArrow && drawingIndex > 0) drawingIndex--;
+            else if (key.Key == ConsoleKey.DownArrow && drawingIndex < drawings.Length - 1) drawingIndex++;
             else if (key.Key == ConsoleKey.Enter)
-                return files[fileIndex];
+                return drawings[drawingIndex];
         }
     }
 
-    static void LoadDrawing(string filePath)
+    static void LoadDrawing(Drawing drawing)
     {
-        rajz.Clear();
-        var lines = File.ReadAllLines(filePath);
-        foreach (var line in lines)
-        {
-            var parts = line.Split(',');
-            int x = int.Parse(parts[0]);
-            int y = int.Parse(parts[1]);
-            char karakter = parts[2][0];
-            ConsoleColor szin = (ConsoleColor)Enum.Parse(typeof(ConsoleColor), parts[3]);
-            rajz.Add((x, y, karakter, szin));
-        }
 
+        rajz.AddRange(drawing.Points);
         RedrawSavedDrawing();
     }
 
     static void SaveDrawing(string fileName)
     {
-        List<string> lines = new List<string>();
-        foreach (var item in rajz)
+        using (var context = new DrawingContext())
         {
-            lines.Add($"{item.x},{item.y},{item.karakter},{item.szin}");
-        }
+            var newDrawing = new Drawing
+            {
+                Name = fileName,
+                Points = new List<Point>()
+            };
 
-        File.WriteAllLines(Path.Combine(saveDirectory, fileName), lines);
+            foreach (var point in rajz)
+            {
+                if (!newDrawing.Points.Any(p => p.Id == point.Id))
+                {
+                    newDrawing.Points.Add(point);
+                }
+            }
+
+            context.Drawings.Add(newDrawing);
+            context.SaveChanges();
+        }
     }
+
 
     static void DrawingMode()
     {
         bool drawing = true;
         Console.Clear();
+
         while (drawing)
         {
-            DrawBorder();
             RedrawSavedDrawing();
             var key = Console.ReadKey(true);
 
@@ -219,52 +194,34 @@ class Program
                 Console.ForegroundColor = drawColor;
                 Console.Write(drawCharacter);
                 Console.ResetColor();
-                rajz.Add((x, y, drawCharacter, drawColor));
+                rajz.Add(new Point { X = x, Y = y, Character = drawCharacter, Color = drawColor });
             }
             else if (key.Key == ConsoleKey.Escape)
             {
                 Console.Clear();
                 Console.Write("Add meg a mentés nevét: ");
                 string fileName = Console.ReadLine();
-                SaveDrawing(fileName + ".txt");
+                SaveDrawing(fileName);
                 drawing = false;
                 inDrawingMode = false;
                 Console.Clear();
             }
-            else if (key.Key == ConsoleKey.F1)
-            {
-                drawCharacter = '█'; 
-            }
-            else if (key.Key == ConsoleKey.F2)
-            {
-                drawCharacter = '▓'; 
-            }
-            else if (key.Key == ConsoleKey.F3)
-            {
-                drawCharacter = '▒'; 
-            }
-            else if (key.Key == ConsoleKey.F4)
-            {
-                drawCharacter = '░'; 
-            }
-            else if (key.Key >= ConsoleKey.D0 && key.Key <= ConsoleKey.D9)
-            {
-                drawColor = (ConsoleColor)(key.Key - ConsoleKey.D0); 
-            }
-            else
-            {
-                MoveCursor(ref x, ref y, key);
-            }
+            else if (key.Key == ConsoleKey.F1) drawCharacter = '█';
+            else if (key.Key == ConsoleKey.F2) drawCharacter = '▓';
+            else if (key.Key == ConsoleKey.F3) drawCharacter = '▒';
+            else if (key.Key == ConsoleKey.F4) drawCharacter = '░';
+            else if (key.Key >= ConsoleKey.D0 && key.Key <= ConsoleKey.D9) drawColor = (ConsoleColor)(key.Key - ConsoleKey.D0);
+            else MoveCursor(ref x, ref y, key);
         }
     }
 
     static void RedrawSavedDrawing()
     {
-        foreach (var item in rajz)
+        foreach (var point in rajz)
         {
-            Console.SetCursorPosition(item.x, item.y);
-            Console.ForegroundColor = item.szin;
-            Console.Write(item.karakter);
+            Console.SetCursorPosition(point.X, point.Y);
+            Console.ForegroundColor = point.Color;
+            Console.Write(point.Character);
         }
         Console.ResetColor();
     }
@@ -279,10 +236,10 @@ class Program
             case ConsoleKey.DownArrow: if (y < Console.WindowHeight - 2) y++; break;
         }
     }
+
     static void ShowMenu(string[] options, int selectedIndex)
     {
         int startY = Console.WindowHeight / 2 - options.Length / 2;
-
         for (int i = 0; i < options.Length; i++)
         {
             Console.SetCursorPosition(Console.WindowWidth / 2 - options[i].Length / 2, startY + i);
@@ -298,6 +255,7 @@ class Program
             }
         }
     }
+
     static void DrawMenuBorder()
     {
         int menuWidth = 24;
@@ -323,28 +281,41 @@ class Program
         for (int i = 0; i < menuWidth - 2; i++) Console.Write("═");
         Console.Write("╝");
     }
+}
 
-    static void DrawBorder()
+public class Drawing
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public List<Point> Points { get; set; } = new List<Point>();
+}
+
+public class Point
+{
+    public int Id { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+    public char Character { get; set; }
+    public ConsoleColor Color { get; set; }
+}
+
+public class DrawingContext : DbContext
+{
+    public DbSet<Drawing> Drawings { get; set; }
+    public DbSet<Point> Points { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        int width = Console.WindowWidth;
-        int height = Console.WindowHeight;
+        optionsBuilder.UseSqlite("Data Source=drawings.db");
+    }
 
-        Console.SetCursorPosition(0, 0);
-        Console.Write("╔");
-        for (int i = 1; i < width - 1; i++) Console.Write("═");
-        Console.Write("╗");
-
-        Console.SetCursorPosition(0, height - 1);
-        Console.Write("╚");
-        for (int i = 1; i < width - 1; i++) Console.Write("═");
-        Console.Write("╝");
-
-        for (int i = 1; i < height - 1; i++)
-        {
-            Console.SetCursorPosition(0, i);
-            Console.Write("║");
-            Console.SetCursorPosition(width - 1, i);
-            Console.Write("║");
-        }
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Point>()
+            .HasKey(p => p.Id);
+        modelBuilder.Entity<Drawing>()
+            .HasMany(d => d.Points)
+            .WithOne()
+            .HasForeignKey(p => p.Id);
     }
 }
